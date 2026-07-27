@@ -20,7 +20,10 @@ import logging
 import joblib
 from dataclasses import asdict
 
-from config import ModelConfig, DEFAULT_RANDOM_STATE, TARGET_COLUMN
+try:
+    from .config import DEFAULT_RANDOM_STATE, TARGET_COLUMN, ModelConfig
+except ImportError:  # pragma: no cover - fallback when run as a script
+    from config import DEFAULT_RANDOM_STATE, TARGET_COLUMN, ModelConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

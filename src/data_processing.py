@@ -2,17 +2,21 @@
 Data processing module for credit risk model.
 Handles feature engineering, RFM clustering, and preprocessing.
 """
-import pandas as pd
+import logging
+from dataclasses import dataclass
+from typing import List, Optional
+
 import numpy as np
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+import pandas as pd
+from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.cluster import KMeans
-from typing import Tuple, Optional, List
-from dataclasses import dataclass
-import logging
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from config import RFMConfig, DEFAULT_RANDOM_STATE, TARGET_COLUMN
+try:
+    from .config import DEFAULT_RANDOM_STATE, TARGET_COLUMN, RFMConfig
+except ImportError:  # pragma: no cover - fallback when run as a script
+    from config import DEFAULT_RANDOM_STATE, TARGET_COLUMN, RFMConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -73,15 +77,16 @@ def calculate_rfm_features(df: pd.DataFrame, snapshot_date: Optional[pd.Timestam
         snapshot_date = df['TransactionStartTime'].max()
     
     # Group by customer
-    rfm = df.groupby('CustomerId').agg({
-        'TransactionStartTime': lambda x: (snapshot_date - x.max()).days,
-        'TransactionId': 'count',
-        'Amount': 'sum'
-    }).rename(columns={
-        'TransactionStartTime': 'Recency',
-        'TransactionId': 'Frequency',
-        'Monetary': 'Monetary'  # Already named Monetary
-    })
+    rfm = (
+        df.groupby('CustomerId')
+        .agg(
+            Recency=('TransactionStartTime', lambda x: (snapshot_date - x.max()).days),
+            Frequency=('TransactionId', 'count'),
+            Monetary=('Amount', 'sum')
+        )
+        .reset_index()
+        .set_index('CustomerId')
+    )
     
     # Handle potential missing values
     rfm = rfm.fillna(0)
@@ -114,42 +119,33 @@ def cluster_customers(rfm_df: pd.DataFrame, config: RFMConfig) -> pd.Series:
 
 
 def identify_high_risk_cluster(rfm_df: pd.DataFrame, clusters: pd.Series) -> int:
-    """
-    Identify the cluster with highest risk (lowest engagement).
-    Typically: low frequency, low monetary, high recency.
-    
-    Args:
-        rfm_df: RFM features.
-        clusters: Cluster labels.
-    
-    Returns:
-        int: The cluster index considered highest risk.
-    """
-    cluster_stats = rfm_df.groupby(clusters).mean()
-    # Low frequency, low monetary, high recency = high risk
-    # We compute a "risk score" and pick the cluster with highest score
+    """Identify the cluster with highest risk (lowest engagement)."""
+    cluster_stats = rfm_df.copy()
+    cluster_stats['cluster'] = pd.Series(clusters.to_numpy(), index=rfm_df.index)
+    cluster_stats = cluster_stats.groupby('cluster').mean()
+
     cluster_stats['risk_score'] = (
-        -cluster_stats['Frequency'] 
-        - cluster_stats['Monetary'] 
+        -cluster_stats['Frequency']
+        - cluster_stats['Monetary']
         + cluster_stats['Recency']
     )
-    return cluster_stats['risk_score'].idxmax()
+    return int(cluster_stats['risk_score'].idxmax())
 
 
 def create_target_variable(df: pd.DataFrame, rfm_clusters: pd.Series, risk_cluster: int) -> pd.DataFrame:
-    """
-    Add binary target column: 1 if customer belongs to high-risk cluster.
-    
-    Args:
-        df: Original DataFrame (with CustomerId).
-        rfm_clusters: Series of cluster labels per customer.
-        risk_cluster: The cluster index considered high risk.
-    
-    Returns:
-        pd.DataFrame: Original data with added 'is_high_risk' column.
-    """
-    df['is_high_risk'] = (rfm_clusters == risk_cluster).astype(int)
-    return df
+    """Add a binary target column aligned to the input rows."""
+    result = df.copy()
+
+    if 'CustomerId' in result.columns and hasattr(rfm_clusters, 'index'):
+        cluster_map = pd.Series(rfm_clusters.to_numpy(), index=rfm_clusters.index)
+        result['is_high_risk'] = (
+            result['CustomerId'].map(cluster_map).astype(int) == risk_cluster
+        ).astype(int)
+    else:
+        cluster_series = pd.Series(rfm_clusters.reset_index(drop=True).to_numpy(), index=result.index)
+        result['is_high_risk'] = (cluster_series == risk_cluster).astype(int)
+
+    return result
 
 
 def build_preprocessing_pipeline(config: FeatureConfig) -> Pipeline:
