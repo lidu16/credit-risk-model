@@ -51,7 +51,31 @@ class SHAPExplainer:
             X_sample = self.X_train.sample(n=sample_size, random_state=42)
             self.explainer = shap.KernelExplainer(self.model.predict_proba, X_sample)
             self.shap_values = self.explainer.shap_values(self.X_train)
-    
+
+    def _extract_positive_class_shap(self, shap_vals: Any) -> np.ndarray:
+        """
+        Extract 2D SHAP values (samples, features) for the positive class (class 1).
+        Handles lists, 3D numpy arrays (N, features, classes), and 2D arrays.
+        """
+        if isinstance(shap_vals, list):
+            vals = shap_vals[1] if len(shap_vals) > 1 else shap_vals[0]
+            return np.array(vals)
+        elif isinstance(shap_vals, np.ndarray):
+            if shap_vals.ndim == 3:
+                return shap_vals[:, :, 1] if shap_vals.shape[2] > 1 else shap_vals[:, :, 0]
+            elif shap_vals.ndim == 2:
+                return shap_vals
+        return np.array(shap_vals)
+
+    def _extract_positive_class_base_value(self, base_val: Any) -> float:
+        """
+        Extract scalar base_value for the positive class (class 1).
+        """
+        if isinstance(base_val, (list, np.ndarray)):
+            b = base_val[1] if len(base_val) > 1 else base_val[0]
+            return float(b)
+        return float(base_val)
+
     def get_feature_importance(self) -> pd.DataFrame:
         """
         Get global feature importance (mean absolute SHAP values).
@@ -59,11 +83,7 @@ class SHAPExplainer:
         Returns:
             DataFrame with feature names and importance scores.
         """
-        if isinstance(self.shap_values, list):
-            # For binary classification, use positive class SHAP values
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
+        shap_vals = self._extract_positive_class_shap(self.shap_values)
         
         importance = pd.DataFrame({
             'feature': self.X_train.columns,
@@ -83,12 +103,7 @@ class SHAPExplainer:
             matplotlib Figure object.
         """
         fig, ax = plt.subplots(figsize=figsize)
-        
-        if isinstance(self.shap_values, list):
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
-        
+        shap_vals = self._extract_positive_class_shap(self.shap_values)
         shap.summary_plot(shap_vals, self.X_train, show=False, max_display=15)
         plt.title("SHAP Feature Importance Summary", fontsize=14, fontweight='bold')
         plt.tight_layout()
@@ -105,12 +120,7 @@ class SHAPExplainer:
             matplotlib Figure object.
         """
         fig, ax = plt.subplots(figsize=figsize)
-        
-        if isinstance(self.shap_values, list):
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
-        
+        shap_vals = self._extract_positive_class_shap(self.shap_values)
         shap.summary_plot(shap_vals, self.X_train, plot_type="bar", show=False, max_display=15)
         plt.title("Top 15 Features by SHAP Importance", fontsize=14, fontweight='bold')
         plt.tight_layout()
@@ -128,12 +138,7 @@ class SHAPExplainer:
             matplotlib Figure object.
         """
         fig, ax = plt.subplots(figsize=figsize)
-        
-        if isinstance(self.shap_values, list):
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
-        
+        shap_vals = self._extract_positive_class_shap(self.shap_values)
         shap.dependence_plot(feature, shap_vals, self.X_train, show=False)
         plt.title(f"SHAP Dependence Plot: {feature}", fontsize=14, fontweight='bold')
         plt.tight_layout()
@@ -149,24 +154,12 @@ class SHAPExplainer:
         Returns:
             Dictionary with SHAP values, base value, and features.
         """
-        if isinstance(self.shap_values, list):
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
-        
-        # Get SHAP values for the sample
-        sample_shap = self.explainer.shap_values(X_sample)
-        
-        if isinstance(sample_shap, list):
-            sample_shap = sample_shap[1] if len(sample_shap) > 1 else sample_shap[0]
-        
-        # Get base value (expected value)
-        base_value = self.explainer.expected_value
-        if isinstance(base_value, list):
-            base_value = base_value[1] if len(base_value) > 1 else base_value[0]
+        sample_shap_raw = self.explainer.shap_values(X_sample)
+        sample_shap = self._extract_positive_class_shap(sample_shap_raw)
+        base_value = self._extract_positive_class_base_value(self.explainer.expected_value)
         
         # Predicted probability
-        pred_proba = self.model.predict_proba(X_sample)[0, 1]
+        pred_proba = float(self.model.predict_proba(X_sample)[0, 1])
         
         # Create feature contributions
         contributions = []
@@ -193,20 +186,9 @@ class SHAPExplainer:
         Returns:
             HTML string for rendering force plot.
         """
-        if isinstance(self.shap_values, list):
-            shap_vals = self.shap_values[1] if len(self.shap_values) > 1 else self.shap_values[0]
-        else:
-            shap_vals = self.shap_values
-        
-        # Get SHAP values for the sample
-        sample_shap = self.explainer.shap_values(X_sample)
-        
-        if isinstance(sample_shap, list):
-            sample_shap = sample_shap[1] if len(sample_shap) > 1 else sample_shap[0]
-        
-        base_value = self.explainer.expected_value
-        if isinstance(base_value, list):
-            base_value = base_value[1] if len(base_value) > 1 else base_value[0]
+        sample_shap_raw = self.explainer.shap_values(X_sample)
+        sample_shap = self._extract_positive_class_shap(sample_shap_raw)
+        base_value = self._extract_positive_class_base_value(self.explainer.expected_value)
         
         # Generate force plot
         force_plot = shap.force_plot(
